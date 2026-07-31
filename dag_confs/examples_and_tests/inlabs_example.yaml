@@ -11,8 +11,8 @@ dag:
     sources:
     - INLABS
     terms:
-      - tecnologia
-      - informação
+      - Comando da Aeronáutica
+      #- informação
     use_summary: True
   report:
     emails:

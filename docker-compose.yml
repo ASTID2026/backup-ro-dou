@@ -39,6 +39,10 @@
 x-airflow-common: &airflow-common
   build:
     context: .
+    network: host
+  #dns:
+  #  - 8.8.8.8
+  #  - 1.1.1.1
   environment: &airflow-common-env
     AIRFLOW__API__AUTH_BACKEND: 'airflow.api.auth.backend.basic_auth'
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
@@ -48,14 +52,14 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__FERNET_KEY: 'Uqv6pwYWJn7xifR3QAkifMTkupos8mkxaQL2Q7Ydsqw='
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-    AIRFLOW__EMAIL__DEFAULT_EMAIL_ON_FAILURE: 'false'
-    AIRFLOW__EMAIL__DEFAULT_EMAIL_ON_RETRY: 'false'
-    AIRFLOW__SMTP__SMTP_HOST: smtp4dev
-    AIRFLOW__SMTP__SMTP_MAIL_FROM: rodou@gestao.gov.br
-    AIRFLOW__SMTP__SMTP_PORT: 25
-    AIRFLOW__SMTP__SMTP_STARTTLS: 'false'
-    # AIRFLOW__SMTP__SMTP_USER:
-    # AIRFLOW__SMTP__SMTP_PASSWORD:
+    AIRFLOW__EMAIL__DEFAULT_EMAIL_ON_FAILURE: 'true'
+    AIRFLOW__EMAIL__DEFAULT_EMAIL_ON_RETRY: 'true'
+    AIRFLOW__SMTP__SMTP_HOST: smtp.mail.intraer 
+    AIRFLOW__SMTP__SMTP_MAIL_FROM: " Assessoria de TI e Evolução Digital <astid.cenciar@fab.mil.br> "
+    AIRFLOW__SMTP__SMTP_PORT: 587
+    AIRFLOW__SMTP__SMTP_STARTTLS: 'true'
+    AIRFLOW__SMTP__SMTP_USER: astid.cenciar@fab.mil.br
+    AIRFLOW__SMTP__SMTP_PASSWORD: n8Z0vylaexorUYVN3n2W
 
     AIRFLOW__WEBSERVER__DEFAULT_UI_TIMEZONE: 'America/Sao_Paulo'
     AIRFLOW__WEBSERVER__SECRET_KEY: '42'
@@ -139,7 +143,7 @@ services:
       test: [ "CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -qv '\"status\":\"red\"'" ]
       interval: 10s
       timeout: 10s
-      retries: 10
+      retries: 20
     restart: always
 
   smtp4dev:

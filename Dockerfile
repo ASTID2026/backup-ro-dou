@@ -1,4 +1,5 @@
 FROM apache/airflow:2.10.0-python3.10
+RUN pip install --no-cache-dir PyGithub
 
 USER root
 
@@ -23,7 +24,7 @@ RUN pip install --upgrade pip && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-ARG AI_PROVIDERS=""
+ARG AI_PROVIDERS="openai gemini"
 
 COPY requirements-ai.txt .
 

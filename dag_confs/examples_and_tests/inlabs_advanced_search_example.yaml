@@ -10,10 +10,10 @@ dag:
     sources:
     - INLABS
     terms:
-      - designar AND (MGI OR "MINISTÉRIO FAZENDA")
-      - instituto AND federal NOT paraná
+      - Ata AND ("Comando da Aeronáutica")
+      #- instituto AND federal NOT paraná
   report:
     emails:
-      - destination@economia.gov.br
+      - valerianorvs@fab.mil.br
     attach_csv: True
     subject: "Teste do Ro-dou"
