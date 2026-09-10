@@ -41,7 +41,7 @@ dag:
     use_summary: false
     ai_search_config: 
       use_ai_summary: true
-      ai_pub_limit: 25
+      ai_pub_limit: 15
       ai_custom_prompt: |
         grife em vermelho resultado das pesquisas as quais  encontrar palavras " dispensa, internacional, multa, notificação, imposição, intimação, penalidade, carta de credenciamento, diálogo competitivo, emergêncial, inexigibilidade". se não encontrar nenhuma dessas palavras, não grife nada
   

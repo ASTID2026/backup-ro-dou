@@ -71,8 +71,8 @@ def sync_and_filter_tcu_acordaos():
         
         # Converte o DataFrame filtrado de volta para CSV na memória (usando o separador |)
         csv_buffer = io.StringIO()
-        df_filtrado.to_csv(csv_buffer, index=False, sep='|', quoting=1)
-        
+        df_filtrado.to_csv(csv_buffer, index=False, sep='|', quoting=3, escapechar='\\')
+                
         # Prepara para envio ao GitHub
         encoded_content = base64.b64encode(csv_buffer.getvalue().encode('utf-8')).decode('utf-8')
         
