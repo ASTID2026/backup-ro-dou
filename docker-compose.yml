@@ -76,6 +76,7 @@ x-airflow-common: &airflow-common
     OPENSEARCH_HOST: http://opensearch:9200
     OPENSEARCH_USER: OPENSEARCH_USER
     OPENSEARCH_PASS: OPENSEARCH_PASS
+    _PIP_ADDITIONAL_REQUIREMENTS: "holidays requests"
 
   volumes:
     - ./src:/opt/airflow/dags/ro_dou_src # for development purpose

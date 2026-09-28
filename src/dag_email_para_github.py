@@ -54,9 +54,15 @@ def extrair_emails_e_comitar(**kwargs):
     ids_emails = mensagens[0].split()
 
     if not ids_emails:
-        print("Nenhum e-mail novo encontrado na caixa de entrada.")
         mail.logout()
-        return
+        # Levantamos uma exceção para forçar a falha da tarefa, 
+        # acionando as repetições (retries) configuradas na DAG.
+        raise ValueError("Nenhum e-mail novo encontrado na caixa de entrada. Acionando nova tentativa em 30 min.")
+
+    # Pega as datas atuais para usar no nome do arquivo e no corpo do texto
+    data_atual = datetime.now()
+    data_nome_arquivo = data_atual.strftime("%d%m%Y")
+    data_corpo_arquivo = data_atual.strftime("%d/%m/%Y")
 
     for email_id in ids_emails:
         status, dados_msg = mail.fetch(email_id, "(RFC822)")
@@ -72,15 +78,15 @@ def extrair_emails_e_comitar(**kwargs):
                         if part.get("Content-Disposition") is None:
                             continue
                         
-                        nome_arquivo = part.get_filename()
+                        nome_anexo = part.get_filename()
                         
                         # Se houver um arquivo e ele for CSV
-                        if nome_arquivo and nome_arquivo.lower().endswith('.csv'):
-                            nome_arquivo, encoding = decode_header(nome_arquivo)[0]
-                            if isinstance(nome_arquivo, bytes):
-                                nome_arquivo = nome_arquivo.decode(encoding if encoding else 'utf-8')
+                        if nome_anexo and nome_anexo.lower().endswith('.csv'):
+                            nome_anexo, encoding = decode_header(nome_anexo)[0]
+                            if isinstance(nome_anexo, bytes):
+                                nome_anexo = nome_anexo.decode(encoding if encoding else 'utf-8')
                             
-                            print(f"Processando CSV encontrado: {nome_arquivo}")
+                            print(f"Processando CSV encontrado no e-mail: {nome_anexo}")
                             conteudo_arquivo_bytes = part.get_payload(decode=True)
                             
                             try:
@@ -89,15 +95,18 @@ def extrair_emails_e_comitar(**kwargs):
                                 
                                 # 2. Suprime as 3 primeiras colunas (se o arquivo tiver mais de 3 colunas)
                                 if len(df.columns) > 3:
-                                    df_modificado = df.iloc[:, 3:]
+                                    df_modificado = df.iloc[:, 3:].copy()
                                 else:
                                     # Se tiver 3 ou menos, remove tudo deixando um df vazio (segurança)
                                     df_modificado = pd.DataFrame()
                                 
-                                # 3. Prepara o novo CSV modificado em memória
+                                # 3. Insere a data da extração no corpo do arquivo (nova coluna)
+                                if not df_modificado.empty:
+                                    df_modificado['Data_Extracao'] = data_corpo_arquivo
+                                
+                                # 4. Prepara o novo CSV modificado em memória
                                 csv_buffer = io.StringIO()
                                 
-                                # === ALTERAÇÃO AQUI: Sem aspas, delimitador Windows (;), e quebra de linha Windows (\r\n) ===
                                 df_modificado.to_csv(
                                     csv_buffer, 
                                     index=False, 
@@ -110,22 +119,23 @@ def extrair_emails_e_comitar(**kwargs):
                                 # Recomendado: forçar encoding como latin1 ou utf-8-sig para garantir leitura correta de acentos no Excel Windows
                                 csv_bytes = csv_buffer.getvalue().encode('utf-8-sig')
                                 
-                                # 4. Prepara o novo arquivo Excel (.xlsx) em memória
+                                # 5. Prepara o novo arquivo Excel (.xlsx) em memória
                                 excel_buffer = io.BytesIO()
                                 df_modificado.to_excel(excel_buffer, index=False, engine='openpyxl')
                                 excel_bytes = excel_buffer.getvalue()
                                 
-                                # 5. Define o nome do arquivo Excel
-                                nome_excel = nome_arquivo.rsplit('.', 1)[0] + '.xlsx'
+                                # 6. Define os novos nomes padronizados dos arquivos (CSV e Excel)
+                                nome_arquivo_padronizado = f"extracao_dou_{data_nome_arquivo}.csv"
+                                nome_excel_padronizado = f"extracao_dou_{data_nome_arquivo}.xlsx"
 
-                                # 6. Envia o CSV modificado para a pasta "csv_recebidos"
-                                enviar_para_github(nome_arquivo, csv_bytes, github_token, "csv_recebidos")
+                                # 7. Envia o CSV modificado para a pasta "csv_recebidos"
+                                enviar_para_github(nome_arquivo_padronizado, csv_bytes, github_token, "csv_recebidos")
                                 
-                                # 7. Envia o Excel modificado para a pasta "excell"
-                                enviar_para_github(nome_excel, excel_bytes, github_token, "excell")
+                                # 8. Envia o Excel modificado para a pasta "excell"
+                                enviar_para_github(nome_excel_padronizado, excel_bytes, github_token, "excell")
 
                             except Exception as e:
-                                print(f"Erro ao processar os dados do arquivo {nome_arquivo}: {e}")
+                                print(f"Erro ao processar os dados do arquivo {nome_anexo}: {e}")
 
     mail.logout()
 
@@ -137,16 +147,16 @@ default_args = {
     'depends_on_past': False,
     'email_on_failure': False,
     'email_on_retry': False,
-    'retries': 1,
-    'retry_delay': timedelta(minutes=5),
+    'retries': 10,                            # Tenta repetir até 10 vezes caso falhe/não ache o arquivo
+    'retry_delay': timedelta(minutes=30),     # Aguarda exatamente 30 minutos entre cada repetição
 }
 
-# Criando a DAG que rodará a cada hora
+# Criando a DAG que rodará às 10h de Seg a Sex
 with DAG(
     'extracao_csv_email_para_github',
     default_args=default_args,
     description='Extrai anexos CSV de emails, remove 3 primeiras colunas e envia como CSV e Excel para o GitHub',
-    schedule_interval='0 9 * * MON-FRI',
+    schedule_interval='0 10 * * MON-FRI',     # Executa às 10:00 da manhã, de Segunda a Sexta
     start_date=datetime(2023, 1, 1),
     catchup=False,
     tags=['automacao', 'github', 'email', 'pandas'],

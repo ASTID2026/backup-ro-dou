@@ -14,3 +14,7 @@ lxml>=6.0.2
 PyGithub==2.3.0
 openpyxl
 pandas
+pdfplumber
+PyMuPDF
+holidays
+beautifulsoup4

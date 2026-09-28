@@ -3,7 +3,6 @@ Postgres db.
 """
 
 import os
-
 import sys
 import subprocess
 import logging
@@ -14,22 +13,18 @@ from airflow.decorators import dag, task  # type: ignore
 from airflow.models.param import Param  # type: ignore
 from airflow.operators.python import get_current_context  # type: ignore
 from airflow.models import Variable  # type: ignore
-
 from airflow.providers.common.sql.operators.sql import SQLCheckOperator  # type: ignore
 
 from ro_dou_src.utils.open_search.config import RO_DOU_INLABS_USE_OPENSEARCH  # type: ignore
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 # Constants
-
 DEST_DIR = "download_inlabs"
 DEST_CONN_ID = "inlabs_db"
 INLABS_CONN_ID = "inlabs_portal"
 STG_TABLE = "dou_inlabs.article_raw"
 
-
 # DAG
-
 default_args = {
     "owner": "ro-dou_inlabs_load_pg",
     "start_date": datetime(2024, 4, 1),
@@ -37,7 +32,6 @@ default_args = {
     "retries": 6,
     "retry_delay": timedelta(minutes=5),
 }
-
 
 @dag(
     dag_id="ro-dou_inlabs_load_pg",
@@ -88,7 +82,6 @@ def load_inlabs():
                 data={"email": inlabs_conn.login, "password": inlabs_conn.password},
                 headers=headers,
             )
-            # Test if logged
             if not session.cookies.get("inlabs_session_cookie", None):
                 raise ValueError("Auth failed")
             return session
@@ -132,12 +125,10 @@ def load_inlabs():
                     f.write(r.content)
 
             logging.info("Downloaded files: %s", files)
-
             return True
 
         def _unzip_files():
             all_files = os.listdir(dest_path)
-            # filter zip files
             zip_files = [file for file in all_files if file.endswith(".zip")]
             for zip_file in zip_files:
                 zip_file_path = os.path.join(dest_path, zip_file)
@@ -160,6 +151,7 @@ def load_inlabs():
         import pandas as pd
         from slugify import slugify  # type: ignore
         from airflow.providers.postgres.hooks.postgres import PostgresHook  # type: ignore
+        from sqlalchemy.dialects.postgresql import insert
 
         def _read_files():
             dest_path = os.path.join(Variable.get("path_tmp"), DEST_DIR)
@@ -175,7 +167,10 @@ def load_inlabs():
             df.drop(columns=["body"], inplace=True)
             df["pubdate"] = pd.to_datetime(df["pubdate"], format="%d/%m/%Y")
             df["assina"] = df["texto"].apply(_get_assina)
-
+            
+            # Garante que não há IDs duplicados no próprio lote antes de enviar ao banco
+            df = df.drop_duplicates(subset=['id'], keep='last')
+            
             return df
 
         def _get_assina(text):
@@ -183,28 +178,27 @@ def load_inlabs():
             p_tags = soup.find_all("p", class_="assina")
             return ", ".join([p.text for p in p_tags]) if p_tags else None
 
-        def _clean_db(hook: PostgresHook):
-            table_exists = hook.get_first(f"""
-                SELECT EXISTS (
-                    SELECT 1
-                    FROM information_schema.tables
-                    WHERE table_name = '{STG_TABLE.split(".")[1]}'
-                );
-            """)
-            if table_exists[0]:
-                hook.run(
-                    f"DELETE FROM {STG_TABLE} WHERE DATE(pubdate) = '{trigger_date}'"
-                )
+        # Função de UPSERT para ignorar o conflito e atualizar em caso de chave duplicada
+        def insert_on_conflict_update(table, conn, keys, data_iter):
+            data = [dict(zip(keys, row)) for row in data_iter]
+            stmt = insert(table.table).values(data)
+            update_stmt = stmt.on_conflict_do_update(
+                index_elements=['id'],
+                set_={c.key: c for c in stmt.excluded if c.key != 'id'}
+            )
+            conn.execute(update_stmt)
 
         df = _read_files()
         hook = PostgresHook(DEST_CONN_ID)
-        _clean_db(hook)
+        
+        # A etapa de `_clean_db` foi removida porque o UPSERT já resolve qualquer conflito
         df.to_sql(
             name=STG_TABLE.split(".")[1],
             schema=STG_TABLE.split(".", maxsplit=1)[0],
             con=hook.get_sqlalchemy_engine(),
             if_exists="append",
             index=False,
+            method=insert_on_conflict_update  # Usa a inserção nativa com tratamento de conflito
         )
         logging.info("Table `%s` updated with %s lines.", STG_TABLE, len(df))
 
@@ -222,11 +216,9 @@ def load_inlabs():
 
     @task.branch
     def check_if_should_run_indexer():
-
         if RO_DOU_INLABS_USE_OPENSEARCH.lower() == 'true':
             logging.info("OpenSearch enabled. Running indexer task.")
             return "indexer_data"
-
         logging.info("OpenSearch disabled. Skipping indexer task.")
         return "skip_indexer_data"
 
@@ -237,7 +229,6 @@ def load_inlabs():
     @task
     def indexer_data(trigger_date: str) -> None:
         from ro_dou_src.utils.open_search.indexer import Indexer  # type: ignore
-
         indexer = Indexer(conn_id=DEST_CONN_ID)
         indexer.run(trigger_date)
 
@@ -292,6 +283,5 @@ def load_inlabs():
         >> check_first_run_task
         >> [trigger_dataset_inlabs_edicao_extra(), trigger_dataset_inlabs()]
     )
-
 
 load_inlabs()

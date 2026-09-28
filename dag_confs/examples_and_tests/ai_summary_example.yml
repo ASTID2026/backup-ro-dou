@@ -4,6 +4,9 @@ dag:
   tags:
     - inlabs
   schedule: 0 8 * * MON-FRI
+  default_args:
+    retries: 6
+    retry_delay_minutes: 30
   dataset: inlabs
   owner:
     - cdata
