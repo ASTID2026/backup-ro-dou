@@ -5,7 +5,8 @@ import json
 import re
 import holidays
 import sqlite3
-import fitz  # PyMuPDF
+import fitz  # PyMuPDF (mantido para leitura e extração do texto original)
+import pdfkit # Adicionado para conversão HTML -> PDF
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from airflow import DAG
@@ -108,7 +109,6 @@ def extrair_e_filtrar_bca(**kwargs):
     conn.commit()
 
     doc = fitz.open(caminho_arquivo)
-    paginas_para_manter = set()
     alvos_encontrados = []
     
     texto_completo = ""
@@ -136,7 +136,13 @@ def extrair_e_filtrar_bca(**kwargs):
             continue
             
         bloco_upper = bloco_limpo.upper()
-        termos_presentes = [t for t in termos_busca_texto if t in bloco_upper]
+        
+        # Correção: Busca os termos ignorando espaços duplos ou quebras de linha
+        termos_presentes = []
+        for t in termos_busca_texto:
+            padrao_busca = r'\s+'.join(re.escape(p) for p in t.split())
+            if re.search(padrao_busca, bloco_upper):
+                termos_presentes.append(t)
         
         if termos_presentes:
             linhas = bloco_limpo.split('\n')
@@ -145,9 +151,14 @@ def extrair_e_filtrar_bca(**kwargs):
             
             def processar_buffer():
                 if not buffer_pessoa: return []
-                texto_pessoa = " ".join(buffer_pessoa)
-                if any(t in texto_pessoa.upper() for t in termos_presentes):
-                    return buffer_pessoa
+                texto_pessoa = " ".join(buffer_pessoa).upper()
+                
+                # Valida usando o mesmo padrão flexível
+                for t in termos_presentes:
+                    padrao = r'\s+'.join(re.escape(p) for p in t.split())
+                    if re.search(padrao, texto_pessoa):
+                        return buffer_pessoa
+                
                 if re.search(r'\b\d{6,7}\b', texto_pessoa):
                     return []
                 return buffer_pessoa
@@ -177,26 +188,33 @@ def extrair_e_filtrar_bca(**kwargs):
                     else:
                         linhas_filtradas.append(linha_strip)
                         
-            # Processa o último militar se houver
             if buffer_pessoa:
                 linhas_filtradas.extend(processar_buffer())
             
-            # Reconstrói juntando quebras de linha isoladas (frases quebradas no meio) com espaço
             texto_final = "\n".join(linhas_filtradas)
             texto_final = re.sub(r'(?<!\n)\n(?!\n)', ' ', texto_final)
-            
-            # Remove seções vazias residuais e numerações de folha perdidas
             texto_final = re.sub(r'(?is)SEÇÃO\s+[IVXLC]+\s*[-–].*?\(Sem alteração\)', '', texto_final)
             texto_final = re.sub(r'(?i)Fl\.\s*n[º°]\s*\d+', '', texto_final)
             
-            # Converte as quebras duplas (parágrafos reais) para tags do HTML
-            texto_final = re.sub(r'\n{2,}', '<br><br>', texto_final).strip()
+            termos_presentes.sort(key=len, reverse=True)
             
-            # Formatação de Card HTML (CSS Inline para não quebrar no E-mail)
+            # Grifa usando Regex flexível (trata quebras de linha/espaços no nome)
+            for termo in termos_presentes:
+                padrao_highlight = r'\s+'.join(re.escape(p) for p in termo.split())
+                texto_final = re.sub(
+                    rf'({padrao_highlight})', 
+                    r'<mark style="background-color: yellow; padding: 2px 4px; border-radius: 3px; font-weight: bold; color: black;">\1</mark>', 
+                    texto_final, 
+                    flags=re.IGNORECASE
+                )
+            
+            texto_final = re.sub(r'\n{2,}', '<br><br>', texto_final).strip()
+            termos_card_html = " ".join([f"<mark style='background-color: yellow; padding: 2px 4px; border-radius: 3px; color: black;'>{t}</mark>" for t in termos_presentes])
+
             materias_extraidas.append(
                 f"<div style='background-color: #ffffff; border-left: 5px solid #004B87; border-radius: 4px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); font-family: Arial, sans-serif;'>\n"
                 f"  <div style='color: #d9534f; font-size: 13px; text-transform: uppercase; margin-bottom: 15px; border-bottom: 1px solid #eeeeee; padding-bottom: 8px;'>\n"
-                f"      <strong>⚠️ TERMOS ENCONTRADOS: {', '.join(termos_presentes)}</strong>\n"
+                f"      <strong>⚠️ ALVOS NESTE BLOCO: {termos_card_html}</strong>\n"
                 f"  </div>\n"
                 f"  <div style='text-align: justify; line-height: 1.6; font-size: 14px; color: #333333;'>\n"
                 f"      {texto_final}\n"
@@ -204,81 +222,104 @@ def extrair_e_filtrar_bca(**kwargs):
                 f"</div>"
             )
 
-    destaques_por_pagina = {}
-
+    # Identificação dos alvos encontrados (para salvar no BD e resumo)
     for num_pagina, pagina in enumerate(doc):
         texto_pagina = pagina.get_text()
         texto_limpo = " ".join(texto_pagina.split()).upper()
 
-        pagina_tem_alvo = False
-
         for nome in FILTROS_MONITORAMENTO.get('nomes', []):
             nome_limpo = str(nome).strip().upper()
-            if nome_limpo:
-                padrao_nome = re.compile(r'\s+'.join(re.escape(p) for p in nome_limpo.split()))
-                match = padrao_nome.search(texto_limpo)
-                if match:
-                    alvos_encontrados.append({'tipo': 'Nome', 'termo': nome.strip()})
-                    pagina_tem_alvo = True
-                    for inst in pagina.search_for(match.group(0)):
-                        destaques_por_pagina.setdefault(num_pagina, []).append(inst)
+            if nome_limpo and re.compile(r'\s+'.join(re.escape(p) for p in nome_limpo.split())).search(texto_limpo):
+                alvos_encontrados.append({'tipo': 'Nome', 'termo': nome.strip()})
 
         for saram in FILTROS_MONITORAMENTO.get('sarams', []):
             saram_limpo = str(saram).strip().upper()
-            if saram_limpo:
-                padrao_saram = re.compile(rf"\b{re.escape(saram_limpo)}[\-\/]?\d*\b")
-                match = padrao_saram.search(texto_limpo)
-                if match:
-                    alvos_encontrados.append({'tipo': 'SARAM', 'termo': saram.strip()})
-                    pagina_tem_alvo = True
-                    for inst in pagina.search_for(match.group(0)):
-                        destaques_por_pagina.setdefault(num_pagina, []).append(inst)
+            if saram_limpo and re.compile(rf"\b{re.escape(saram_limpo)}[\-\/]?\d*\b").search(texto_limpo):
+                alvos_encontrados.append({'tipo': 'SARAM', 'termo': saram.strip()})
 
         for om in FILTROS_MONITORAMENTO.get('oms', []):
             om_limpa = str(om).strip().upper()
-            if om_limpa:
-                padrao_om = re.compile(rf"\b{re.escape(om_limpa)}\b")
-                match = padrao_om.search(texto_limpo)
-                if match:
-                    alvos_encontrados.append({'tipo': 'Unidade (OM)', 'termo': om.strip()})
-                    pagina_tem_alvo = True
-                    for inst in pagina.search_for(match.group(0)):
-                        destaques_por_pagina.setdefault(num_pagina, []).append(inst)
+            if om_limpa and re.compile(rf"\b{re.escape(om_limpa)}\b").search(texto_limpo):
+                alvos_encontrados.append({'tipo': 'Unidade (OM)', 'termo': om.strip()})
 
-        if pagina_tem_alvo:
-            paginas_para_manter.add(num_pagina)
+    doc.close()
 
     if not alvos_encontrados:
         conn.close()
-        doc.close()
         os.remove(caminho_arquivo)
         raise AirflowSkipException("Nenhum dos alvos monitorados foi encontrado no boletim de hoje. Push cancelado.")
 
-    novo_doc = fitz.open()
-    for num_pagina in sorted(list(paginas_para_manter)):
-        novo_doc.insert_pdf(doc, from_page=num_pagina, to_page=num_pagina)
+    caminho_filtrado_pdf = os.path.join(DIRETORIO_TMP, f"BCA_{data_bca}_Filtrado.pdf")
+    caminho_relatorio_html = os.path.join(DIRETORIO_TMP, f"Relatorio_BCA_{data_bca}.html")
 
-    for novo_idx, orig_idx in enumerate(sorted(list(paginas_para_manter))):
-        if orig_idx in destaques_por_pagina:
-            pagina_alvo = novo_doc[novo_idx]
-            for rect in destaques_por_pagina[orig_idx]:
-                highlight = pagina_alvo.add_highlight_annot(rect)
-                highlight.set_colors(stroke=(1, 1, 0))
-                highlight.update()
-    
-    caminho_filtrado_pdf = caminho_arquivo.replace(".pdf", "_filtrado.pdf")
-    caminho_materias_md = caminho_arquivo.replace(".pdf", "_materias.md")
-    
-    novo_doc.save(caminho_filtrado_pdf)
-    novo_doc.close()
-    doc.close()
+    texto_final_cards = "".join(materias_extraidas)
+    termos_unicos = sorted(list(set([alvo['termo'] for alvo in alvos_encontrados])))
+    termos_destacados_html = " ".join([
+        f'<span style="background-color: yellow; padding: 4px 8px; border-radius: 4px; font-weight: bold; color: black; display: inline-block; margin: 4px 4px 4px 0;">{t}</span>' 
+        for t in termos_unicos
+    ])
 
-    texto_final_md = "".join(materias_extraidas)
-    for termo in termos_busca_texto:
-        texto_final_md = re.sub(rf'\b({re.escape(termo)})\b', r'<mark style="background-color: #ffeb3b; padding: 2px 4px; border-radius: 3px; font-weight: bold; color: #000;">\1</mark>', texto_final_md, flags=re.IGNORECASE)
+    corpo_email_completo = f"""
+    <!DOCTYPE html>
+    <html>
+        <head>
+            <meta charset="utf-8">
+        </head>
+        <body style="font-family: Arial, sans-serif; background-color: #f4f4f9; margin: 0; padding: 20px;">
+            <div style="max-width: 800px; margin: 0 auto; background-color: #f4f4f9;">
+                
+                <div style="background-color: #004B87; color: #ffffff; padding: 25px; text-align: center; border-radius: 8px 8px 0 0;">
+                    <h2 style="margin: 0; font-size: 22px; font-weight: normal;">Boletim do Comando da Aeronáutica (BCA)</h2>
+                    <p style="margin: 8px 0 0 0; font-size: 14px; color: #e0e0e0; text-transform: uppercase;">Relatório de Alertas Monitorados</p>
+                </div>
+                
+                <div style="background-color: #ffffff; padding: 30px; border-left: 1px solid #dddddd; border-right: 1px solid #dddddd;">
+                    <p style="color: #333333; font-size: 15px; border-bottom: 1px dashed #cccccc; padding-bottom: 15px;">
+                        Data de Publicação: <strong>{data_bca}</strong>
+                    </p>
+                    
+                    <div style="background-color: #fcf8e3; border-left: 4px solid #faebcc; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
+                        <p style="color: #8a6d3b; font-size: 14px; margin-top: 0; margin-bottom: 10px;">
+                            <strong>Termos de busca encontrados nesta edição:</strong>
+                        </p>
+                        <div>
+                            {termos_destacados_html}
+                        </div>
+                    </div>
 
-    with open(caminho_materias_md, "w", encoding="utf-8") as f_md:
-        f_md.write(texto_final_md)
+                    <p style="color: #555555; font-size: 14px; margin-bottom: 25px;">
+                        Confira os recortes das matérias abaixo (os termos estão <mark style="background-color: yellow; padding: 2px 4px; border-radius: 3px; font-weight: bold; color: black;">destacados</mark>):
+                    </p>
+                    
+                    {texto_final_cards}
+
+                </div>
+                
+                <div style="background-color: #eeeeee; text-align: center; padding: 20px; font-size: 12px; color: #777777; border-radius: 0 0 8px 8px; border: 1px solid #dddddd; border-top: none;">
+                    Este é um relatório automático gerado pelo Apache Airflow.<br><br>
+                    <strong>Nota:</strong> Este documento foi gerado automaticamente a partir das matérias filtradas.
+                </div>
+                
+            </div>
+        </body>
+    </html>
+    """
+
+    # 1. Salva o HTML
+    with open(caminho_relatorio_html, "w", encoding="utf-8") as f_html:
+        f_html.write(corpo_email_completo)
+
+    # 2. Converte o HTML diretamente em PDF para que fiquem idênticos
+    opcoes_pdf = {
+        'encoding': 'UTF-8',
+        'enable-local-file-access': None,
+        'no-outline': None,
+        'margin-top': '0mm',
+        'margin-right': '0mm',
+        'margin-bottom': '0mm',
+        'margin-left': '0mm'
+    }
+    pdfkit.from_string(corpo_email_completo, caminho_filtrado_pdf, options=opcoes_pdf)
 
     novos_registros = []
     for alvo in alvos_encontrados:
@@ -302,7 +343,7 @@ def extrair_e_filtrar_bca(**kwargs):
             print(f"TIPO: {reg['tipo']} | TERMO ACHADO: {reg['termo']}")
         print("=======================================")
     
-    return [caminho_filtrado_pdf, caminho_materias_md]
+    return [caminho_filtrado_pdf, caminho_relatorio_html]
 
 def enviar_email_bca(**kwargs):
     ti = kwargs['ti']
@@ -315,69 +356,26 @@ def enviar_email_bca(**kwargs):
     if isinstance(arquivos, str):
         arquivos = [arquivos]
 
-    # Identifica o PDF (anexo) e o MD (corpo do email)
     arquivo_pdf = next((f for f in arquivos if f.endswith('.pdf')), None)
-    arquivo_md = next((f for f in arquivos if f.endswith('.md')), None)
+    arquivo_html = next((f for f in arquivos if f.endswith('.html')), None)
     
-    # Resgata o email destino da variável do Airflow
-    email_dest = Variable.get("email_rec", default_var=None)
+    email_dest = Variable.get("email_rec_bca", default_var=None)
     
     if not email_dest:
-        print("Aviso: Variável 'email_rec' não configurada. E-mail não será enviado.")
+        print("Aviso: Variável 'email_rec_bca' não configurada. E-mail não será enviado.")
         return
 
     conteudo_html = ""
-    if arquivo_md and os.path.exists(arquivo_md):
-        with open(arquivo_md, 'r', encoding='utf-8') as f:
+    if arquivo_html and os.path.exists(arquivo_html):
+        with open(arquivo_html, 'r', encoding='utf-8') as f:
             conteudo_html = f.read()
 
-    corpo_email = f"""
-    <!DOCTYPE html>
-    <html>
-        <head>
-            <meta charset="utf-8">
-        </head>
-        <body style="font-family: Arial, sans-serif; background-color: #f4f4f9; margin: 0; padding: 20px;">
-            <div style="max-width: 800px; margin: 0 auto; background-color: #f4f4f9;">
-                
-                <!-- Cabeçalho -->
-                <div style="background-color: #004B87; color: #ffffff; padding: 25px; text-align: center; border-radius: 8px 8px 0 0;">
-                    <h2 style="margin: 0; font-size: 22px; font-weight: normal;">Boletim do Comando da Aeronáutica (BCA)</h2>
-                    <p style="margin: 8px 0 0 0; font-size: 14px; color: #e0e0e0; text-transform: uppercase;">Relatório de Alertas Monitorados</p>
-                </div>
-                
-                <!-- Corpo Principal -->
-                <div style="background-color: #ffffff; padding: 30px; border-left: 1px solid #dddddd; border-right: 1px solid #dddddd;">
-                    <p style="color: #333333; font-size: 15px; border-bottom: 1px dashed #cccccc; padding-bottom: 15px;">
-                        Data de Publicação: <strong>{data_bca}</strong>
-                    </p>
-                    <p style="color: #555555; font-size: 14px; margin-bottom: 25px;">
-                        Foram encontradas atualizações referentes aos termos monitorados no boletim de hoje. Confira os recortes abaixo:
-                    </p>
-                    
-                    <!-- Os cards das matérias extraídas entram aqui -->
-                    {conteudo_html}
-
-                </div>
-                
-                <!-- Rodapé -->
-                <div style="background-color: #eeeeee; text-align: center; padding: 20px; font-size: 12px; color: #777777; border-radius: 0 0 8px 8px; border: 1px solid #dddddd; border-top: none;">
-                    Este é um e-mail automático gerado pelo Apache Airflow (Ro-dou).<br><br>
-                    <strong>Nota:</strong> O documento original em PDF, com as páginas filtradas e hachuradas em amarelo para comprovação, encontra-se em anexo a este e-mail.
-                </div>
-                
-            </div>
-        </body>
-    </html>
-    """
-    
     anexos = [arquivo_pdf] if arquivo_pdf and os.path.exists(arquivo_pdf) else None
 
-    # Utiliza as configurações SMTP nativas do Airflow Docker
     send_email(
         to=email_dest,
         subject=f"Monitoramento BCA - {data_bca}",
-        html_content=corpo_email,
+        html_content=conteudo_html,
         files=anexos
     )
     
@@ -444,7 +442,7 @@ default_args = {
 with DAG(
     'download_processamento_bca',
     default_args=default_args,
-    description='Pesquisa BCA, filtra páginas, delimita matérias e envia ao GitHub.',
+    description='Pesquisa BCA, extrai HTML formatado e converte para PDF idêntico.',
     schedule_interval='0 * * * 1-5', 
     catchup=False,
     tags=['intraer', 'bca', 'scraping', 'alertas']
@@ -474,6 +472,4 @@ with DAG(
         provide_context=True,
     )
 
-    # A execução do e-mail ocorre após a filtragem e ANTES do envio para o GitHub 
-    # (pois a task do GitHub remove os arquivos do diretório ao final)
     task_baixar_bca >> task_filtrar_bca >> task_enviar_email >> task_git_push

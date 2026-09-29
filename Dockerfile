@@ -1,7 +1,17 @@
 FROM apache/airflow:2.10.0-python3.10
-RUN pip install --no-cache-dir PyGithub
+
+# Instalação do PyGithub e do pdfkit
+RUN pip install --no-cache-dir PyGithub pdfkit
 
 USER root
+
+# Instalação do wkhtmltopdf e limpeza do cache do apt
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       wkhtmltopdf \
+    && apt-get autoremove -yqq --purge \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy Ro-dou core files from the host Docker context
 COPY src /opt/airflow/dags/ro_dou_src
@@ -34,6 +44,3 @@ RUN if [ -n "$AI_PROVIDERS" ]; then \
   done && \
   pip install -r /tmp/filtered.txt; \
   fi
-
-
-
