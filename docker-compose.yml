@@ -58,8 +58,6 @@ x-airflow-common: &airflow-common
     AIRFLOW__SMTP__SMTP_MAIL_FROM: " Assessoria de TI e Evolucao Digital <astid.cenciar@fab.mil.br> "
     AIRFLOW__SMTP__SMTP_PORT: 587
     AIRFLOW__SMTP__SMTP_STARTTLS: 'true'
-    #AIRFLOW__SMTP__SMTP_USER: astid.cenciar@fab.mil.br
-    #AIRFLOW__SMTP__SMTP_PASSWORD: n8Z0vylaexorUYVN3n2W
     AIRFLOW__SMTP__SMTP_TIMEOUT: '60'
     AIRFLOW_CONN_SMTP_DEFAULT: "smtp://astid.cenciar@fab.mil.br:n8Z0vylaexorUYVN3n2W@smtp.fab.mil.br:587" 
     AIRFLOW__WEBSERVER__DEFAULT_UI_TIMEZONE: 'America/Sao_Paulo'
