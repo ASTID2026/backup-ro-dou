@@ -49,7 +49,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__DEFAULT_TIMEZONE: 'America/Sao_Paulo'
     AIRFLOW__CORE__ENABLE_XCOM_PICKLING: 'true'
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
-    AIRFLOW__CORE__FERNET_KEY: 'Uqv6pwYWJn7xifR3QAkifMTkupos8mkxaQL2Q7Ydsqw='
+    AIRFLOW__CORE__FERNET_KEY: '${AIRFLOW_FERNET_KEY}'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
     AIRFLOW__EMAIL__DEFAULT_EMAIL_ON_FAILURE: 'true'
@@ -59,7 +59,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__SMTP__SMTP_PORT: 587
     AIRFLOW__SMTP__SMTP_STARTTLS: 'true'
     AIRFLOW__SMTP__SMTP_TIMEOUT: '60'
-    AIRFLOW_CONN_SMTP_DEFAULT: "smtp://astid.cenciar@fab.mil.br:n8Z0vylaexorUYVN3n2W@smtp.fab.mil.br:587" 
+    AIRFLOW_CONN_SMTP_DEFAULT: "smtp://${SMTP_USER}:${SMTP_PASSWORD}@smtp.fab.mil.br:587"
     AIRFLOW__WEBSERVER__DEFAULT_UI_TIMEZONE: 'America/Sao_Paulo'
     AIRFLOW__WEBSERVER__SECRET_KEY: '42'
     AIRFLOW__WEBSERVER__WORKERS: 1
