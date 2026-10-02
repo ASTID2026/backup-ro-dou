@@ -1,4 +1,4 @@
-import os
+""" import os
 import requests
 import base64
 import json
@@ -171,4 +171,4 @@ with DAG(
         provide_context=True,
     )
 
-    task_baixar_bca >> task_git_push
+    task_baixar_bca >> task_git_push """
